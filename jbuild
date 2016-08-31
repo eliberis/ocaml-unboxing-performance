@@ -1,0 +1,7 @@
+(executables
+ ((names (main))
+  (libraries (core_extended
+              core_bench
+             ))
+ )
+)
