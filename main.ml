@@ -56,7 +56,7 @@ let random_coltri_ubx r = {
 }
 
 let consume_point a =
-  ignore(a.x > 0 && a.y > 0 && a.z > 0)
+  assert(a.x > 0 && a.y > 0 && a.z > 0)
 
 let consume_triangle t =
   consume_point t.a;
@@ -75,7 +75,7 @@ let t1 =
     (fun () ->
        let t1 = random_triangle random_int1 in
        let t2 = random_triangle random_int2 in
-       let b = random_int1 > 5 in
+       let b = random_int1 > 2500 in
        (* Undecidable branch (at compile time) to prevent inlining
           the triangle *)
        let t = if b then t1 else t2 in
@@ -88,7 +88,7 @@ let t2 =
     (fun () ->
        let t1 = random_triangle_ubx random_int1 in
        let t2 = random_triangle_ubx random_int2 in
-       let b = random_int1 > 5 in
+       let b = random_int1 > 2500 in
        let t = if b then t1 else t2 in
        consume_triangle_ubx t
     )
@@ -99,7 +99,7 @@ let t3 =
     (fun () ->
        let t1 = random_coltri random_int1 in
        let t2 = random_coltri random_int2 in
-       let b = random_int1 > 5 in
+       let b = random_int1 > 2500 in
        let t = if b then t1 else t2 in
        consume_triangle t.purple;
        consume_triangle t.yellow;
@@ -113,7 +113,7 @@ let t4 =
     (fun () ->
        let t1 = random_coltri_ubx random_int1 in
        let t2 = random_coltri_ubx random_int2 in
-       let b = random_int1 > 5 in
+       let b = random_int1 > 2500 in
        let t = if b then t1 else t2 in
        consume_triangle_ubx t.green;
        consume_triangle_ubx t.white;
@@ -121,23 +121,54 @@ let t4 =
        consume_triangle_ubx t.lilac
     )
 
-let tests = [ t1; t2; t3; t4 ]
+let t5 =
+  Bench.Test.create
+    ~name:"Access boxed (depth = 2), with-style record creation"
+    (fun () ->
+       let t1 = random_coltri random_int1 in
+       let t2 = { t1 with purple = random_triangle random_int2 } in
+       let b = random_int1 > 2500 in
+       let t = if b then t1 else t2 in
+       consume_triangle t.purple;
+       consume_triangle t.yellow;
+       consume_triangle t.orange;
+       consume_triangle t.salmon
+    )
+
+let t6 =
+  Bench.Test.create
+    ~name:"Access unboxed (depth = 2), with-style record creation"
+    (fun () ->
+       let t1 = random_coltri_ubx random_int1 in
+       let tri2 = { t1 with green = random_triangle_ubx random_int2 } in
+       let b = random_int1 > 25 in
+       let t = if b then t1 else tri2 in
+       consume_triangle_ubx t.green;
+       consume_triangle_ubx t.white;
+       consume_triangle_ubx t.black;
+       consume_triangle_ubx t.lilac
+    )
+
+let tests = [ t1; t2; t3; t4; t5; t6 ]
 
 let command = Bench.make_command tests
 let () =
   Random.init(0);
   Command.run(command)
 
-(* Benchmark results: *)
+(* Benchmark results (with Flambda): *)
 (*
-   ┌────────────────────────────┬──────────┬─────────┬────────────┐
-   │ Name                       │ Time/Run │ mWd/Run │ Percentage │
-   ├────────────────────────────┼──────────┼─────────┼────────────┤
-   │ Access boxed (depth = 1)   │  20.89ns │  32.00w │     23.46% │
-   │ Access unboxed (depth = 1) │   1.78ns │         │      2.00% │
-   │ Access boxed (depth = 2)   │  89.03ns │ 138.00w │    100.00% │
-   │ Access unboxed (depth = 2) │  39.22ns │  74.01w │     44.05% │
-   └────────────────────────────┴──────────┴─────────┴────────────┘
+
+┌────────────────────────────────────────────────────────┬──────────┬─────────┬────────────┐
+│ Name                                                   │ Time/Run │ mWd/Run │ Percentage │
+├────────────────────────────────────────────────────────┼──────────┼─────────┼────────────┤
+│ Access boxed (depth = 1)                               │  20.16ns │  32.00w │     20.87% │
+│ Access unboxed (depth = 1)                             │  11.50ns │  20.00w │     11.91% │
+│ Access boxed (depth = 2)                               │  96.62ns │ 138.00w │    100.00% │
+│ Access unboxed (depth = 2)                             │  39.84ns │  74.01w │     41.23% │
+│ Access boxed (depth = 2), with-style record creation   │  64.89ns │  90.00w │     67.16% │
+│ Access unboxed (depth = 2), with-style record creation │  44.44ns │  74.01w │     45.99% │
+└────────────────────────────────────────────────────────┴──────────┴─────────┴────────────┘
 
    Explanation:
    1. (Access boxed, depth = 1)
@@ -152,9 +183,6 @@ let () =
        * 2 triangles --- (1 header word plus the following (inlined) each)
          * 3 points  --- 3 words (3 immediates, no header)
      Total: 2 x (1 + 3 x 3) = 20 (words)
-     The compiler is able to inline [consume_triangle] and [random_triangle],
-     and match up field declaration and projection to avoid allocations
-     altogether.
 
    3. (Access boxed, depth = 2)
      Program allocates:
@@ -172,4 +200,29 @@ let () =
          * 4 triangles --- (no header word plus the following (inlined) each)
            * 3 points  --- 3 words (3 immediates, no header)
        Total: 2 x (1 + 4 x 3 x 3) = 74 (words)
+
+   5. (Access boxed (depth = 2), with-style record creation)
+     The situation is similar to 3, but the compiler only allocates [t1]
+      -- 69 words (138/2).
+     In addition to that, another block is allocated for the [purple] field
+     of the triangle -- 16 words.
+     A block for [t2] --- 5 words (1 header + 4 fields)
+     Total: 90 words.
+
+   5. (Access unboxed (depth = 2), with-style record creation)
+     Exactly as in 4.
+*)
+
+(* Benchmark results (without Flambda): *)
+(*
+┌────────────────────────────────────────────────────────┬──────────┬─────────┬────────────┐
+│ Name                                                   │ Time/Run │ mWd/Run │ Percentage │
+├────────────────────────────────────────────────────────┼──────────┼─────────┼────────────┤
+│ Access boxed (depth = 1)                               │  21.67ns │  32.00w │      7.24% │
+│ Access unboxed (depth = 1)                             │  44.03ns │  56.00w │     14.71% │
+│ Access boxed (depth = 2)                               │ 120.43ns │ 138.04w │     40.25% │
+│ Access unboxed (depth = 2)                             │ 299.23ns │ 338.04w │    100.00% │
+│ Access boxed (depth = 2), with-style record creation   │  51.93ns │  90.02w │     17.35% │
+│ Access unboxed (depth = 2), with-style record creation │ 157.13ns │ 302.06w │     52.51% │
+└────────────────────────────────────────────────────────┴──────────┴─────────┴────────────┘
 *)
